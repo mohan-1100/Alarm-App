@@ -7,12 +7,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- Core Alarm & Wake Permissions -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <!-- NEW: Required for the alarm to vibrate -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -22,10 +21,15 @@
 
     <!-- NEW: Required to read custom ringtones from the user's phone -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!-- NEW: Helps the alarm push through the lock screen -->
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+
+    <!-- Add tools:overrideLibrary to bypass potential minSdk conflicts from ML libraries -->
+    <uses-sdk tools:overrideLibrary="com.google.mediapipe.tasks.vision, com.google.mlkit.vision.common, com.google.mlkit.common, com.google.mlkit.vision.interfaces, com.google.android.gms.vision.common, org.tensorflow.lite.task.vision, org.tensorflow.lite.task.core, org.tensorflow.lite.support, org.tensorflow.lite.support.api, org.tensorflow.lite, org.tensorflow.lite.api" />
 
     <application
         android:allowBackup="true"
@@ -51,8 +55,6 @@
         <!-- UPDATED: Added launchMode and excludeFromRecents for proper alarm behavior -->
         <activity
             android:name=".AlarmActivity"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:launchMode="singleInstance"
             android:excludeFromRecents="true"
             android:exported="false"

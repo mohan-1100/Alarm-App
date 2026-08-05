@@ -113,7 +113,7 @@ data class AlarmItem(
 }
 
 // ==========================================
-// NEW: Persistent Storage Helper Functions
+// Persistent Storage Helper Functions
 // ==========================================
 fun saveAlarmsToPrefs(context: Context, alarms: List<AlarmItem>) {
     val prefs = context.getSharedPreferences("AlarmPrefs", Context.MODE_PRIVATE)
@@ -200,15 +200,13 @@ fun MainScreenManager() {
     val context = LocalContext.current
     var currentScreen by remember { mutableStateOf("Dashboard") }
     var alarmToEdit by remember { mutableStateOf<AlarmItem?>(null) }
+    val alarmScheduler = remember { AlarmScheduler(context) }
 
-    // UPDATED: Now loads from physical storage instead of hardcoding values
     val alarmList = remember {
         val savedAlarms = loadAlarmsFromPrefs(context)
+        // FIX: Start with an empty list if no alarms have been created by the user
         val initialList = if (savedAlarms.isEmpty()) {
-            listOf(
-                AlarmItem(1, 4, 10, true, null, setOf(1,2,3,4,5,6,7), true, "morning", "Bottle"),
-                AlarmItem(2, 8, 5, true, null, setOf(1,2,3,4,5,6,7), true, "morning", "Cup")
-            )
+            emptyList<AlarmItem>()
         } else {
             savedAlarms
         }
@@ -234,21 +232,24 @@ fun MainScreenManager() {
                 onSave = { updatedAlarm ->
                     if (alarmToEdit == null) {
                         val newId = (alarmList.maxOfOrNull { it.id } ?: 0) + 1
-                        alarmList.add(updatedAlarm.copy(id = newId))
+                        val newAlarm = updatedAlarm.copy(id = newId)
+                        alarmList.add(newAlarm)
+                        alarmScheduler.schedule(newAlarm.id, newAlarm.hour, newAlarm.minute, newAlarm.label, newAlarm.targetObject)
                     } else {
                         val index = alarmList.indexOfFirst { it.id == updatedAlarm.id }
                         if (index != -1) {
                             alarmList[index] = updatedAlarm
                         }
+                        alarmScheduler.schedule(updatedAlarm.id, updatedAlarm.hour, updatedAlarm.minute, updatedAlarm.label, updatedAlarm.targetObject)
                     }
-                    // NEW: Save to physical storage after adding/editing
+
                     saveAlarmsToPrefs(context, alarmList)
+                    Toast.makeText(context, "Alarm Saved", Toast.LENGTH_SHORT).show()
                     currentScreen = "Dashboard"
                 },
                 onDelete = { alarmToDelete ->
-                    AlarmScheduler(context).cancel(alarmToDelete.id)
+                    alarmScheduler.cancel(alarmToDelete.id)
                     alarmList.removeIf { it.id == alarmToDelete.id }
-                    // NEW: Save to physical storage after deleting
                     saveAlarmsToPrefs(context, alarmList)
                     Toast.makeText(context, "Alarm Deleted", Toast.LENGTH_SHORT).show()
                     currentScreen = "Dashboard"
@@ -342,7 +343,6 @@ fun AlarmDashboardScreen(
                             alarm.isEnabled = isChecked
                             updateTrigger++
 
-                            // NEW: Save to physical storage when toggling an alarm on/off
                             saveAlarmsToPrefs(context, alarmList)
 
                             if (isChecked) {
@@ -367,7 +367,6 @@ fun EditAlarmScreen(
     onDelete: (AlarmItem) -> Unit,
     onCancel: () -> Unit
 ) {
-    val context = LocalContext.current
     val calendar = Calendar.getInstance()
 
     var hour by remember { mutableIntStateOf(initialAlarm?.hour ?: calendar.get(Calendar.HOUR_OF_DAY)) }
@@ -376,7 +375,6 @@ fun EditAlarmScreen(
     var repeatDays by remember { mutableStateOf(initialAlarm?.repeatDays ?: emptySet()) }
     var vibrate by remember { mutableStateOf(initialAlarm?.vibrate ?: true) }
     var label by remember { mutableStateOf(initialAlarm?.label ?: "") }
-
     var targetObject by remember { mutableStateOf(initialAlarm?.targetObject ?: "Cup") }
 
     val timePickerState = rememberTimePickerState(
@@ -438,9 +436,6 @@ fun EditAlarmScreen(
                     label = label,
                     targetObject = targetObject
                 )
-
-                AlarmScheduler(context).schedule(finalAlarm.id, finalAlarm.hour, finalAlarm.minute, finalAlarm.label, finalAlarm.targetObject)
-                Toast.makeText(context, "Alarm Saved", Toast.LENGTH_SHORT).show()
                 onSave(finalAlarm)
             }) {
                 Icon(Icons.Default.Check, contentDescription = "Save", tint = Color.White)

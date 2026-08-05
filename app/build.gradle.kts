@@ -34,6 +34,11 @@ android {
     buildFeatures {
         compose = true
     }
+    // NEW: Prevents Gradle from compressing the TFLite model file inside the app build
+    androidResources {
+        noCompress += "tflite"
+        noCompress += "txt"
+    }
 }
 
 dependencies {
@@ -62,9 +67,10 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("androidx.camera:camera-extensions:$cameraxVersion")
 
-    // Google ML Kit for Object Detection
-    implementation("com.google.mlkit:object-detection:17.0.1")
-    implementation("com.google.mlkit:object-detection-custom:17.0.1")
-    // Google ML Kit for Image Labeling (Identifies specific objects)
-    implementation("com.google.mlkit:image-labeling:17.0.9")
+    // Official TFLite libraries for YOLOv8
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0") // <- Prevents model load crashes!
 }
+
+// No complex resolution strategy needed if overrideLibrary works

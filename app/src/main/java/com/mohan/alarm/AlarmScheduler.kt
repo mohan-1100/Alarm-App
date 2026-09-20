@@ -13,7 +13,7 @@ class AlarmScheduler(private val context: Context) {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
     @SuppressLint("ScheduleExactAlarm")
-    fun schedule(id: Int, hour: Int, minute: Int, label: String, targetObject: String) {
+    fun schedule(id: Int, hour: Int, minute: Int, label: String, targetObject: String, ringtoneUri: String?, vibrate: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
             val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
             context.startActivity(intent)
@@ -37,8 +37,9 @@ class AlarmScheduler(private val context: Context) {
             putExtra("ALARM_ID", id)
             putExtra("ALARM_LABEL", label)
             putExtra("TARGET_OBJECT", targetObject)
-            // NEW: Save the exact time it is supposed to trigger
             putExtra("EXPECTED_TRIGGER_TIME", calendar.timeInMillis)
+            putExtra("RINGTONE_URI", ringtoneUri)
+            putExtra("VIBRATE", vibrate)
         }
 
         val pendingIntent = PendingIntent.getBroadcast(

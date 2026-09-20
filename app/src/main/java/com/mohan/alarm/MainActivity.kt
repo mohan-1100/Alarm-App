@@ -1,11 +1,14 @@
 package com.mohan.alarm
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -179,19 +182,131 @@ fun loadAlarmsFromPrefs(context: Context): List<AlarmItem> {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
-            }
-        }
-
         enableEdgeToEdge()
         setContent {
             AlarmTheme {
+                // Integrated Permission Handler
+                StartupPermissionHandler()
                 MainScreenManager()
             }
         }
+    }
+}
+
+/**
+ * Reusable Composable that handles Camera and Notification permissions sequentially at app startup.
+ * Now updated to also handle Android 14+ Full Screen Intent permission.
+ */
+@Composable
+fun StartupPermissionHandler() {
+    val context = LocalContext.current
+    val activity = context as ComponentActivity
+    var showRationaleDialog by remember { mutableStateOf(false) }
+    var showFullScreenRationale by remember { mutableStateOf(false) }
+    var isPermanentDenial by remember { mutableStateOf(false) }
+
+    val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(Manifest.permission.CAMERA, Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        arrayOf(Manifest.permission.CAMERA)
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val deniedPermissions = results.filter { !it.value }.keys
+        if (deniedPermissions.isNotEmpty()) {
+            val hasPermanentDenial = deniedPermissions.any { permission ->
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
+            }
+            isPermanentDenial = hasPermanentDenial
+            showRationaleDialog = true
+        } else {
+            // Check for Full Screen Intent permission on Android 14+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val nm = context.getSystemService(NotificationManager::class.java)
+                if (!nm.canUseFullScreenIntent()) {
+                    showFullScreenRationale = true
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val permissionsNotGranted = permissionsToRequest.filter {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (permissionsNotGranted.isNotEmpty()) {
+            launcher.launch(permissionsToRequest)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Even if runtime permissions are granted, check Full Screen Intent for Android 14+
+            val nm = context.getSystemService(NotificationManager::class.java)
+            if (!nm.canUseFullScreenIntent()) {
+                showFullScreenRationale = true
+            }
+        }
+    }
+
+    if (showRationaleDialog) {
+        AlertDialog(
+            onDismissRequest = { showRationaleDialog = false },
+            title = { Text("Permissions Required") },
+            text = {
+                Text("Notifications are required to ring the alarm, and the Camera is required to scan objects to turn it off.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRationaleDialog = false
+                        if (isPermanentDenial) {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                            }
+                            context.startActivity(intent)
+                        } else {
+                            launcher.launch(permissionsToRequest)
+                        }
+                    }
+                ) {
+                    Text(if (isPermanentDenial) "Open Settings" else "Grant Permissions")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRationaleDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showFullScreenRationale) {
+        AlertDialog(
+            onDismissRequest = { showFullScreenRationale = false },
+            title = { Text("Full Screen Access Needed") },
+            text = {
+                Text("This permission is needed to wake the screen and show the alarm interface when the alarm goes off on Android 14+.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showFullScreenRationale = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                            }
+                            context.startActivity(intent)
+                        }
+                    }
+                ) {
+                    Text("Grant Permission")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFullScreenRationale = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -204,7 +319,6 @@ fun MainScreenManager() {
 
     val alarmList = remember {
         val savedAlarms = loadAlarmsFromPrefs(context)
-        // FIX: Start with an empty list if no alarms have been created by the user
         val initialList = if (savedAlarms.isEmpty()) {
             emptyList<AlarmItem>()
         } else {
@@ -234,13 +348,13 @@ fun MainScreenManager() {
                         val newId = (alarmList.maxOfOrNull { it.id } ?: 0) + 1
                         val newAlarm = updatedAlarm.copy(id = newId)
                         alarmList.add(newAlarm)
-                        alarmScheduler.schedule(newAlarm.id, newAlarm.hour, newAlarm.minute, newAlarm.label, newAlarm.targetObject)
+                        alarmScheduler.schedule(newAlarm.id, newAlarm.hour, newAlarm.minute, newAlarm.label, newAlarm.targetObject, newAlarm.ringtoneUri, newAlarm.vibrate)
                     } else {
                         val index = alarmList.indexOfFirst { it.id == updatedAlarm.id }
                         if (index != -1) {
                             alarmList[index] = updatedAlarm
                         }
-                        alarmScheduler.schedule(updatedAlarm.id, updatedAlarm.hour, updatedAlarm.minute, updatedAlarm.label, updatedAlarm.targetObject)
+                        alarmScheduler.schedule(updatedAlarm.id, updatedAlarm.hour, updatedAlarm.minute, updatedAlarm.label, updatedAlarm.targetObject, updatedAlarm.ringtoneUri, updatedAlarm.vibrate)
                     }
 
                     saveAlarmsToPrefs(context, alarmList)
@@ -346,7 +460,7 @@ fun AlarmDashboardScreen(
                             saveAlarmsToPrefs(context, alarmList)
 
                             if (isChecked) {
-                                alarmScheduler.schedule(alarm.id, alarm.hour, alarm.minute, alarm.label, alarm.targetObject)
+                                alarmScheduler.schedule(alarm.id, alarm.hour, alarm.minute, alarm.label, alarm.targetObject, alarm.ringtoneUri, alarm.vibrate)
                             } else {
                                 alarmScheduler.cancel(alarm.id)
                             }
@@ -387,10 +501,19 @@ fun EditAlarmScreen(
     var showRepeatDialog by remember { mutableStateOf(false) }
     var showObjectDialog by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
     val audioPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             ringtoneUri = uri.toString()
         }
     }
@@ -469,7 +592,7 @@ fun EditAlarmScreen(
                 SettingsRow(
                     title = "Ringtone",
                     value = if (ringtoneUri == null) "Default" else "Custom Audio",
-                    onClick = { audioPickerLauncher.launch("audio/*") }
+                    onClick = { audioPickerLauncher.launch(arrayOf("audio/*")) }
                 )
                 Divider(color = Color(0xFF3A3A3A), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 

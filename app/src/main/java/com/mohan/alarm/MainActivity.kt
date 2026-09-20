@@ -672,7 +672,12 @@ fun EditAlarmScreen(
     }
 
     if (showObjectDialog) {
-        val objectOptions = listOf("Bottle", "Cup")
+        val objectOptions = listOf(
+            "Backpack", "Bicycle", "Book", "Bottle", "Bowl",
+            "Car", "Cat", "Cup", "Dog", "Fork",
+            "Handbag", "Keyboard", "Knife", "Laptop", "Spoon",
+            "Suitcase", "Toilet", "Toothbrush", "Tv"
+        )
         AlertDialog(
             onDismissRequest = { showObjectDialog = false },
             title = { Text("Select Object to Scan") },

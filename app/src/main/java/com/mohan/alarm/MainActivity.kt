@@ -1,13 +1,15 @@
 package com.mohan.alarm
 
 import android.Manifest
-import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -59,6 +61,7 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TimePickerDefaults
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,11 +73,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.mohan.alarm.ui.theme.AlarmTheme
 import kotlinx.coroutines.delay
 import org.json.JSONArray
@@ -197,13 +204,95 @@ class MainActivity : ComponentActivity() {
  * Reusable Composable that handles Camera and Notification permissions sequentially at app startup.
  * Now updated to also handle Android 14+ Full Screen Intent permission.
  */
+/**
+ * Helper functions for onboarding permission checks and settings intents.
+ */
+fun isBatteryOptimized(context: Context): Boolean {
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    return !powerManager.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+fun hasSeenAutostart(context: Context): Boolean {
+    val prefs = context.getSharedPreferences("OnboardingPrefs", Context.MODE_PRIVATE)
+    return prefs.getBoolean("has_seen_autostart", false)
+}
+
+fun setHasSeenAutostart(context: Context) {
+    val prefs = context.getSharedPreferences("OnboardingPrefs", Context.MODE_PRIVATE)
+    prefs.edit().putBoolean("has_seen_autostart", true).apply()
+}
+
+fun openAutoStartSettings(context: Context) {
+    val components = listOf(
+        ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+        ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+    )
+
+    for (component in components) {
+        try {
+            val intent = Intent().apply {
+                setComponent(component)
+            }
+            context.startActivity(intent)
+            return
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    try {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+fun hasSeenOtherPermissions(context: Context): Boolean {
+    val prefs = context.getSharedPreferences("OnboardingPrefs", Context.MODE_PRIVATE)
+    return prefs.getBoolean("has_seen_other_permissions", false)
+}
+
+fun setHasSeenOtherPermissions(context: Context) {
+    val prefs = context.getSharedPreferences("OnboardingPrefs", Context.MODE_PRIVATE)
+    prefs.edit().putBoolean("has_seen_other_permissions", true).apply()
+}
+
+fun openOtherPermissionsSettings(context: Context) {
+    try {
+        val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+            putExtra("extra_pkgname", context.packageName)
+            setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        e.printStackTrace()
+        try {
+            val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+            }
+            context.startActivity(fallbackIntent)
+        } catch (ex: Exception) {
+            ex.printStackTrace()
+        }
+    }
+}
+
+/**
+ * Reusable Composable that handles onboarding permissions sequentially.
+ * Uses LifecycleEventObserver to re-check permissions when returning from Settings.
+ */
 @Composable
 fun StartupPermissionHandler() {
     val context = LocalContext.current
-    val activity = context as ComponentActivity
-    var showRationaleDialog by remember { mutableStateOf(false) }
-    var showFullScreenRationale by remember { mutableStateOf(false) }
-    var isPermanentDenial by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var showBatteryDialog by remember { mutableStateOf(false) }
+    var showOverlayDialog by remember { mutableStateOf(false) }
+    var showAutostartDialog by remember { mutableStateOf(false) }
+    var showOtherPermissionsDialog by remember { mutableStateOf(false) }
 
     val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         arrayOf(Manifest.permission.CAMERA, Manifest.permission.POST_NOTIFICATIONS)
@@ -213,88 +302,80 @@ fun StartupPermissionHandler() {
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val deniedPermissions = results.filter { !it.value }.keys
-        if (deniedPermissions.isNotEmpty()) {
-            val hasPermanentDenial = deniedPermissions.any { permission ->
-                !ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
-            }
-            isPermanentDenial = hasPermanentDenial
-            showRationaleDialog = true
-        } else {
-            // Check for Full Screen Intent permission on Android 14+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                val nm = context.getSystemService(NotificationManager::class.java)
-                if (!nm.canUseFullScreenIntent()) {
-                    showFullScreenRationale = true
-                }
-            }
-        }
+    ) {
+        // Permission result handled when ON_RESUME triggers re-check
     }
 
-    LaunchedEffect(Unit) {
-        val permissionsNotGranted = permissionsToRequest.filter {
+    fun checkPermissions() {
+        val permissionsNotGranted = permissionsToRequest.any {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (permissionsNotGranted.isNotEmpty()) {
+
+        if (permissionsNotGranted) {
+            showBatteryDialog = false
+            showOverlayDialog = false
+            showAutostartDialog = false
+            showOtherPermissionsDialog = false
             launcher.launch(permissionsToRequest)
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Even if runtime permissions are granted, check Full Screen Intent for Android 14+
-            val nm = context.getSystemService(NotificationManager::class.java)
-            if (!nm.canUseFullScreenIntent()) {
-                showFullScreenRationale = true
-            }
+        } else if (isBatteryOptimized(context)) {
+            showBatteryDialog = true
+            showOverlayDialog = false
+            showAutostartDialog = false
+            showOtherPermissionsDialog = false
+        } else if (!Settings.canDrawOverlays(context)) {
+            showBatteryDialog = false
+            showOverlayDialog = true
+            showAutostartDialog = false
+            showOtherPermissionsDialog = false
+        } else if (!hasSeenAutostart(context)) {
+            showBatteryDialog = false
+            showOverlayDialog = false
+            showAutostartDialog = true
+            showOtherPermissionsDialog = false
+        } else if (!hasSeenOtherPermissions(context)) {
+            showBatteryDialog = false
+            showOverlayDialog = false
+            showAutostartDialog = false
+            showOtherPermissionsDialog = true
+        } else {
+            showBatteryDialog = false
+            showOverlayDialog = false
+            showAutostartDialog = false
+            showOtherPermissionsDialog = false
         }
     }
 
-    if (showRationaleDialog) {
-        AlertDialog(
-            onDismissRequest = { showRationaleDialog = false },
-            title = { Text("Permissions Required") },
-            text = {
-                Text("Notifications are required to ring the alarm, and the Camera is required to scan objects to turn it off.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showRationaleDialog = false
-                        if (isPermanentDenial) {
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts("package", context.packageName, null)
-                            }
-                            context.startActivity(intent)
-                        } else {
-                            launcher.launch(permissionsToRequest)
-                        }
-                    }
-                ) {
-                    Text(if (isPermanentDenial) "Open Settings" else "Grant Permissions")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRationaleDialog = false }) {
-                    Text("Cancel")
-                }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                checkPermissions()
             }
-        )
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
-    if (showFullScreenRationale) {
+    if (showBatteryDialog) {
         AlertDialog(
-            onDismissRequest = { showFullScreenRationale = false },
-            title = { Text("Full Screen Access Needed") },
+            onDismissRequest = { showBatteryDialog = false },
+            title = { Text("Disable Battery Optimization") },
             text = {
-                Text("This permission is needed to wake the screen and show the alarm interface when the alarm goes off on Android 14+.")
+                Text("To ensure alarms trigger reliably when your phone is asleep, please disable battery optimization for this app.")
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        showFullScreenRationale = false
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-                                data = Uri.fromParts("package", context.packageName, null)
-                            }
+                        showBatteryDialog = false
+                        try {
+                            val intent = Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:${context.packageName}")
+                            )
                             context.startActivity(intent)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
                     }
                 ) {
@@ -302,7 +383,92 @@ fun StartupPermissionHandler() {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showFullScreenRationale = false }) {
+                TextButton(onClick = { showBatteryDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showOverlayDialog) {
+        AlertDialog(
+            onDismissRequest = { showOverlayDialog = false },
+            title = { Text("Display Over Other Apps") },
+            text = {
+                Text("To wake your screen and show the alarm over the lock screen, please allow 'Display over other apps'.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showOverlayDialog = false
+                        try {
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                ) {
+                    Text("Grant Permission")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverlayDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showAutostartDialog) {
+        AlertDialog(
+            onDismissRequest = { showAutostartDialog = false },
+            title = { Text("Enable Autostart") },
+            text = {
+                Text("To ensure the alarm can wake your phone from a deep sleep, please enable Autostart (or Background Start) for this app on the next screen.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        setHasSeenAutostart(context)
+                        showAutostartDialog = false
+                        openAutoStartSettings(context)
+                    }
+                ) {
+                    Text("Grant Permission")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAutostartDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showOtherPermissionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showOtherPermissionsDialog = false },
+            title = { Text("Lock Screen Overrides") },
+            text = {
+                Text("To ensure the alarm screen appears immediately over your lock screen, please manually enable 'Show on Lock screen' and 'Open new windows while running in the background' on the following page.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        setHasSeenOtherPermissions(context)
+                        showOtherPermissionsDialog = false
+                        openOtherPermissionsSettings(context)
+                    }
+                ) {
+                    Text("Grant Permission")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOtherPermissionsDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -501,7 +667,32 @@ fun EditAlarmScreen(
     var showRepeatDialog by remember { mutableStateOf(false) }
     var showObjectDialog by remember { mutableStateOf(false) }
 
+    var ringtoneName by remember { mutableStateOf("Default") }
+
     val context = LocalContext.current
+
+    LaunchedEffect(ringtoneUri) {
+        if (ringtoneUri != null) {
+            try {
+                val uri = Uri.parse(ringtoneUri)
+                val cursor = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                cursor?.use {
+                    val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1 && it.moveToFirst()) {
+                        ringtoneName = it.getString(nameIndex) ?: "Default"
+                    } else {
+                        ringtoneName = "Default"
+                    }
+                } ?: run { ringtoneName = "Default" }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                ringtoneName = "Default"
+            }
+        } else {
+            ringtoneName = "Default"
+        }
+    }
+
     val audioPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -581,7 +772,41 @@ fun EditAlarmScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        val now = Calendar.getInstance()
+        val selectedCalendar = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+            set(Calendar.MINUTE, timePickerState.minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+
+            if (before(now)) {
+                add(Calendar.DAY_OF_YEAR, 1)
+            }
+        }
+
+        val diffInMillis = selectedCalendar.timeInMillis - now.timeInMillis
+        val totalMinutes = diffInMillis / (1000 * 60)
+        val timeHours = totalMinutes / 60
+        val timeMinutes = totalMinutes % 60
+
+        val timeUntilText = when {
+            timeHours > 0 && timeMinutes > 0 -> "Alarm in $timeHours hours and $timeMinutes minutes"
+            timeHours > 0 -> "Alarm in $timeHours hours"
+            timeMinutes > 0 -> "Alarm in $timeMinutes minutes"
+            else -> "Alarm in less than a minute"
+        }
+
+        Text(
+            text = timeUntilText,
+            color = Color.Gray,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -591,7 +816,7 @@ fun EditAlarmScreen(
             Column {
                 SettingsRow(
                     title = "Ringtone",
-                    value = if (ringtoneUri == null) "Default" else "Custom Audio",
+                    value = ringtoneName,
                     onClick = { audioPickerLauncher.launch(arrayOf("audio/*")) }
                 )
                 Divider(color = Color(0xFF3A3A3A), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
@@ -735,15 +960,52 @@ fun EditAlarmScreen(
             title = { Text("Repeat") },
             text = {
                 LazyColumn {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { tempDays = emptySet() }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = tempDays.isEmpty(),
+                                onCheckedChange = null,
+                                colors = CheckboxDefaults.colors(checkedColor = Color(0xFF6BA5FF))
+                            )
+                            Text(text = "Once", modifier = Modifier.padding(start = 12.dp))
+                        }
+                    }
+
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { tempDays = setOf(1, 2, 3, 4, 5, 6, 7) }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = tempDays.size == 7,
+                                onCheckedChange = null,
+                                colors = CheckboxDefaults.colors(checkedColor = Color(0xFF6BA5FF))
+                            )
+                            Text(text = "Daily", modifier = Modifier.padding(start = 12.dp))
+                        }
+                    }
+
                     items(daysOfWeek) { (calendarDay, name) ->
                         Row(
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                tempDays = if (tempDays.contains(calendarDay)) {
-                                    tempDays - calendarDay
-                                } else {
-                                    tempDays + calendarDay
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    tempDays = if (tempDays.contains(calendarDay)) {
+                                        tempDays - calendarDay
+                                    } else {
+                                        tempDays + calendarDay
+                                    }
                                 }
-                            }.padding(vertical = 8.dp),
+                                .padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Checkbox(

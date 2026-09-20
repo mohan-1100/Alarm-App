@@ -5,36 +5,44 @@ plugins {
 
 android {
     namespace = "com.mohan.alarm"
-    // Updated to compile against version 37 as required by your libraries
     compileSdk = 37
 
     defaultConfig {
         applicationId = "com.mohan.alarm"
         minSdk = 24
-        targetSdk = 37 // Updated to match your compile SDK
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // This permanently removes x86 and 32-bit libraries, drastically reducing APK size
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // These two lines shred unused code and resources from the final build
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     buildFeatures {
         compose = true
     }
-    // NEW: Prevents Gradle from compressing the TFLite model file inside the app build
+
     androidResources {
         noCompress += "tflite"
         noCompress += "txt"
@@ -70,7 +78,5 @@ dependencies {
     // Official TFLite libraries for YOLOv8
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
-    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0") // <- Prevents model load crashes!
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0")
 }
-
-// No complex resolution strategy needed if overrideLibrary works

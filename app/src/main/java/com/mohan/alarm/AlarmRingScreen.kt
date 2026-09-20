@@ -4,13 +4,13 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
+import android.util.Size
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
-import android.util.Size
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -28,10 +28,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +49,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -71,9 +76,28 @@ fun AlarmRingScreen(
     var cameraInstance by remember { mutableStateOf<Camera?>(null) }
     var currentDetectedItem by remember { mutableStateOf("Scanning...") }
 
-    var emergencyCountdown by remember { mutableIntStateOf(45) }
+    var emergencyCountdown by remember { mutableIntStateOf(15) }
     var canEmergencyDismiss by remember { mutableStateOf(false) }
     var hasDismissed by remember { mutableStateOf(false) }
+    var showTypingTask by remember { mutableStateOf(false) }
+
+    val quotes = remember {
+        listOf(
+            "Discipline equals freedom",
+            "I am awake and focused today",
+            "Every morning is a new beginning",
+            "Rise and shine with purpose",
+            "Today is full of opportunities",
+            "Success starts with waking up",
+            "Make today count",
+            "Action is the foundational key to success",
+            "Great things never come from comfort zones",
+            "Believe you can and you are halfway there",
+            "Focus on your goals",
+            "Win the morning win the day"
+        )
+    }
+    val targetQuote = remember { quotes.random() }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -111,6 +135,8 @@ fun AlarmRingScreen(
                         }
 
                         val detectorHelper = YoloDetectorHelper(ctx) { label, score ->
+                            if (showTypingTask) return@YoloDetectorHelper
+
                             val percent = (score * 100).toInt()
                             currentDetectedItem = if (label.startsWith("ERR:")) {
                                 label // Print exact error message if something fails
@@ -126,7 +152,6 @@ fun AlarmRingScreen(
                                 hasDismissed = true
 
                                 // CRITICAL FIX: Force the dismissal action onto the Main UI Thread
-                                // This prevents the silent background thread crash that was locking up the app
                                 ContextCompat.getMainExecutor(ctx).execute {
                                     onAlarmDismissed()
                                 }
@@ -137,11 +162,7 @@ fun AlarmRingScreen(
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             // Forces the camera to output true RGB colors instead of raw YUV
                             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                            // Cap the analysis frame size. Without this, some
-                            // devices hand back much larger frames (e.g. 1920x1080)
-                            // than the 640x640 the model needs, so every frame
-                            // allocates a needlessly huge bitmap before it's
-                            // even resized down for YOLO.
+                            // Cap the analysis frame size.
                             .setResolutionSelector(
                                 ResolutionSelector.Builder()
                                     .setResolutionStrategy(
@@ -228,10 +249,7 @@ fun AlarmRingScreen(
                 Button(
                     onClick = {
                         if (canEmergencyDismiss) {
-                            if (!hasDismissed) {
-                                hasDismissed = true
-                                onAlarmDismissed()
-                            }
+                            showTypingTask = true
                         } else {
                             Toast.makeText(context, "Please scan object. Emergency unlock in ${emergencyCountdown}s", Toast.LENGTH_SHORT).show()
                         }
@@ -241,9 +259,126 @@ fun AlarmRingScreen(
                     )
                 ) {
                     Text(
-                        text = if (canEmergencyDismiss) "Emergency Stop" else "Wait (${emergencyCountdown}s)",
+                        text = if (canEmergencyDismiss) "Type to Unlock" else "Wait (${emergencyCountdown}s)",
                         color = Color.White
                     )
+                }
+            }
+        }
+
+        if (showTypingTask) {
+            var typedText by remember { mutableStateOf("") }
+            var errorMessage by remember { mutableStateOf("") }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xF1000000))
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Type to Unlock",
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "Type the following quote exactly to dismiss the alarm:",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2C2C2C)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "\"$targetQuote\"",
+                            color = Color(0xFF6BA5FF),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    OutlinedTextField(
+                        value = typedText,
+                        onValueChange = {
+                            typedText = it
+                            errorMessage = ""
+                        },
+                        label = { Text("Type quote here", color = Color.Gray) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            autoCorrect = false,
+                            keyboardType = KeyboardType.Password
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF6BA5FF),
+                            unfocusedBorderColor = Color.Gray,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (errorMessage.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = errorMessage,
+                            color = Color(0xFFFF5252),
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Button(
+                            onClick = { showTypingTask = false },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF444444))
+                        ) {
+                            Text("Back", color = Color.White)
+                        }
+
+                        Button(
+                            onClick = {
+                                if (typedText.trim().equals(targetQuote, ignoreCase = true)) {
+                                    if (!hasDismissed) {
+                                        hasDismissed = true
+                                        onAlarmDismissed()
+                                    }
+                                } else {
+                                    errorMessage = "Incorrect, please try again."
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6BA5FF))
+                        ) {
+                            Text("Submit", color = Color.White)
+                        }
+                    }
                 }
             }
         }

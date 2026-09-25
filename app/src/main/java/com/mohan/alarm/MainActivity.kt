@@ -190,6 +190,29 @@ fun loadAlarmsFromPrefs(context: Context): List<AlarmItem> {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // --- NEW BREADCRUMB CHECK ---
+        // If the alarm is currently ringing in the background, bounce the user directly to the camera screen
+        val prefs = getSharedPreferences("AlarmPrefs", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("IS_RINGING", false)) {
+            val alarmId = prefs.getInt("ALARM_ID", 0)
+            val targetObject = prefs.getString("TARGET_OBJECT", "Cup") ?: "Cup"
+            val ringtoneUri = prefs.getString("RINGTONE_URI", null)
+            val vibrate = prefs.getBoolean("VIBRATE", true)
+
+            val intent = Intent(this, AlarmActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("ALARM_ID", alarmId)
+                putExtra("TARGET_OBJECT", targetObject)
+                putExtra("RINGTONE_URI", ringtoneUri)
+                putExtra("VIBRATE", vibrate)
+            }
+            startActivity(intent)
+            finish() // Close the dashboard immediately so they can't access it
+            return
+        }
+        // ----------------------------
+
         enableEdgeToEdge()
         setContent {
             AlarmTheme {

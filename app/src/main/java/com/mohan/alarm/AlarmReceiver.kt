@@ -1,14 +1,10 @@
 package com.mohan.alarm
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
-import androidx.core.app.NotificationCompat
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -38,11 +34,9 @@ class AlarmReceiver : BroadcastReceiver() {
         )
         wakeLock.acquire(10_000L) // Hold wake lock for 10 seconds
 
-        // 2. Build the intent for AlarmActivity
-        val alarmIntent = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+        // 2. Start ForegroundService to handle notification, audio, vibration, and activity launch
+        val serviceIntent = Intent(context, AlarmRingService::class.java).apply {
+            action = AlarmRingService.ACTION_START_ALARM
             putExtra("ALARM_ID", alarmId)
             putExtra("ALARM_LABEL", label)
             putExtra("TARGET_OBJECT", targetObject)
@@ -50,48 +44,10 @@ class AlarmReceiver : BroadcastReceiver() {
             putExtra("VIBRATE", vibrate)
         }
 
-        // 3. Directly start the activity from background
-        try {
-            context.startActivity(alarmIntent)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // 4. Fallback Full-Screen Notification
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            alarmId,
-            alarmIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "ALARM_WAKE_CHANNEL_V2"
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Alarm Wake Up",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Forces the screen on when an alarm triggers"
-                enableVibration(true)
-                setBypassDnd(true)
-            }
-            notificationManager.createNotificationChannel(channel)
+            context.startForegroundService(serviceIntent)
+        } else {
+            context.startService(serviceIntent)
         }
-
-        val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("Alarm: $label")
-            .setContentText("Scan your $targetObject to dismiss")
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setFullScreenIntent(pendingIntent, true)
-            .setOngoing(true)
-            .setAutoCancel(true)
-            .build()
-
-        notificationManager.notify(alarmId, notification)
     }
 }
